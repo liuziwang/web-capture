@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>网页归档</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <main class="panel">
+    <h1>网页结构与静态资源归档</h1>
+
+    <label class="row" for="fetchConcurrency">
+      <span>资源抓取并发</span>
+      <select id="fetchConcurrency">
+        <option value="4">4</option>
+        <option value="6">6</option>
+        <option value="8">8</option>
+        <option value="10">10</option>
+        <option value="12">12</option>
+        <option value="16">16</option>
+      </select>
+    </label>
+
+    <label class="check-row" for="includeScripts">
+      <input id="includeScripts" type="checkbox" />
+      <span>包含外链脚本文件（不建议默认开启）</span>
+    </label>
+
+    <label class="check-row" for="includeStyles">
+      <input id="includeStyles" type="checkbox" checked />
+      <span>包含样式文件与其引用资源</span>
+    </label>
+
+    <label class="check-row" for="includeMedia">
+      <input id="includeMedia" type="checkbox" checked />
+      <span>包含图片 / 视频 / 音频 / 图标</span>
+    </label>
+
+    <p class="hint">导出结果为 zip，包含 index.html、assets/ 资源目录与 metadata.json，并尽量保留页面滚动后懒加载完成的最终 DOM 状态。默认额外附带 debug.json 便于后续排查样式与布局问题。</p>
+    <button id="captureBtn" type="button">开始归档并下载</button>
+    <p id="status" class="status" aria-live="polite"></p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Web Structure Archiver",
+  "version": "2.1.13",
+  "description": "扫描当前网页的结构代码与静态资源，重写为本地相对路径并打包为 zip 下载。基于 2.1.9 稳定策略，并默认附带 debug.json 调试日志，便于后续针对样式/布局问题持续优化。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "归档当前网页",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "logo/icon16.png",
+      "48": "logo/icon48.png",
+      "128": "logo/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "logo/icon16.png",
+    "48": "logo/icon48.png",
+    "128": "logo/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "capture.js",
+        "runner.js",
+        "logo/icon16.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
