@@ -22,22 +22,6 @@
       </select>
     </label>
 
-    <label class="row" for="carouselMode">
-      <span>轮播导出模式</span>
-      <select id="carouselMode">
-        <option value="visual">视觉还原（默认）</option>
-        <option value="assets">素材完整（展开）</option>
-      </select>
-    </label>
-
-    <label class="row" for="styleFidelity">
-      <span>样式保真等级</span>
-      <select id="styleFidelity">
-        <option value="basic">基础（更稳）</option>
-        <option value="high">高保真（更像原站）</option>
-      </select>
-    </label>
-
     <label class="check-row" for="includeScripts">
       <input id="includeScripts" type="checkbox" />
       <span>包含外链脚本文件（不建议默认开启）</span>
@@ -51,11 +35,6 @@
     <label class="check-row" for="includeMedia">
       <input id="includeMedia" type="checkbox" checked />
       <span>包含图片 / 视频 / 音频 / 图标</span>
-    </label>
-
-    <label class="check-row" for="imagesOnly">
-      <input id="imagesOnly" type="checkbox" />
-      <span>仅抓取图片素材（忽略脚本/样式外链）</span>
     </label>
 
     <p class="hint">导出结果为 zip，包含 index.html、assets/ 资源目录与 metadata.json，并尽量保留页面滚动后懒加载完成的最终 DOM 状态。默认额外附带 debug.json 便于后续排查样式与布局问题。</p>
