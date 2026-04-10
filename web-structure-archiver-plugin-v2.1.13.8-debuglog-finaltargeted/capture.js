@@ -171,7 +171,7 @@
 
   function hydrateLazyAssets(root) {
     root.querySelectorAll('img, source, video, audio, iframe').forEach((el) => {
-      const srcCandidates = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-flickity-lazyload', 'data-lazyload', 'data-bg'];
+      const srcCandidates = ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-flickity-lazyload', 'data-lazyload', 'data-bg', 'data-src-retina', 'data-lazy', 'data-image', 'data-desktop-src', 'data-mobile-src'];
       const srcsetCandidates = ['data-srcset', 'data-lazy-srcset', 'data-bgset'];
       if (!el.getAttribute('src')) {
         for (const attr of srcCandidates) {
@@ -342,7 +342,7 @@
     const src = original.currentSrc || original.getAttribute('src') || original.getAttribute('data-src');
     const absolute = absoluteUrl(src);
     if (absolute) {
-      addResource(absolute, 'media');
+      addResource(absolute, 'video');
       cloned.setAttribute('src', tokenizeUrl(absolute));
     }
     const poster = original.getAttribute('poster');
@@ -358,7 +358,7 @@
     const src = original.currentSrc || original.getAttribute('src') || original.getAttribute('data-src');
     const absolute = absoluteUrl(src);
     if (!absolute) return;
-    addResource(absolute, 'media');
+    addResource(absolute, 'audio');
     cloned.setAttribute('src', tokenizeUrl(absolute));
     cloned.removeAttribute('autoplay');
   }
@@ -982,7 +982,132 @@
     }
   }
 
-  function cleanupArchivedDocument(root, debug) {
+
+  function collectImageLikeResourceCandidates(original, addResource) {
+    if (!(original instanceof Element)) return;
+    const attrs = [
+      'src', 'data-src', 'data-original', 'data-lazy-src', 'data-lazy', 'data-url', 'data-image',
+      'data-desktop-src', 'data-mobile-src', 'data-bg', 'data-background', 'data-lazy-background',
+      'poster', 'data-poster'
+    ];
+    attrs.forEach((attr) => {
+      const raw = original.getAttribute(attr);
+      const absolute = absoluteUrl(raw);
+      if (absolute) addResource(absolute, 'media');
+    });
+
+    const srcsetAttrs = ['srcset', 'data-srcset', 'data-lazy-srcset', 'data-bgset'];
+    srcsetAttrs.forEach((attr) => {
+      const srcset = original.getAttribute(attr);
+      if (!srcset) return;
+      String(srcset).split(',').forEach((part) => {
+        const raw = part.trim().split(/\s+/)[0];
+        const absolute = absoluteUrl(raw);
+        if (absolute) addResource(absolute, 'media');
+      });
+    });
+  }
+
+  function forceCarouselVisualState(original, cloned, addResource, mode = 'visual') {
+    if (!(original instanceof Element) || !(cloned instanceof Element)) return;
+    const classText = `${original.className || ''} ${original.getAttribute('data-swiper-slide-index') || ''}`.toLowerCase();
+    const roleText = `${original.getAttribute('role') || ''} ${original.getAttribute('aria-roledescription') || ''}`.toLowerCase();
+    const isCarouselNode = /(carousel|slider|slick|swiper|splide|glide|flickity|owl)/.test(classText) || /(slide|carousel)/.test(roleText);
+    if (!isCarouselNode) return;
+
+    cloned.style.setProperty('display', 'block', 'important');
+    cloned.style.setProperty('visibility', 'visible', 'important');
+    cloned.style.setProperty('opacity', '1', 'important');
+    cloned.style.setProperty('transform', 'none', 'important');
+
+    if (mode === 'assets' && /track|wrapper|list|rail/.test(classText)) {
+      cloned.style.setProperty('display', 'flex', 'important');
+      cloned.style.setProperty('flex-wrap', 'wrap', 'important');
+      cloned.style.setProperty('gap', '16px', 'important');
+    }
+
+    const style = getComputedStyle(original);
+    if (style.backgroundImage && style.backgroundImage !== 'none') {
+      extractCssUrls(style.backgroundImage, document.baseURI, addResource, 'style-asset');
+      cloned.style.backgroundImage = rewriteCssTextToAbsoluteTokens(style.backgroundImage, document.baseURI, addResource);
+      cloned.style.backgroundSize = style.backgroundSize;
+      cloned.style.backgroundPosition = style.backgroundPosition;
+      cloned.style.backgroundRepeat = style.backgroundRepeat;
+    }
+  }
+
+  function applyHighFidelityStyleSnapshot(original, cloned, addResource) {
+    if (!(original instanceof Element) || !(cloned instanceof Element)) return;
+    const style = getComputedStyle(original);
+    if (!style) return;
+    const rect = original.getBoundingClientRect();
+    if (rect.width < 8 || rect.height < 8) return;
+
+    const props = [
+      'display', 'position', 'z-index', 'width', 'height', 'max-width', 'min-height',
+      'margin', 'padding', 'border', 'border-radius', 'box-shadow',
+      'background', 'background-image', 'background-size', 'background-position', 'background-repeat',
+      'opacity', 'visibility', 'overflow',
+      'font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'color',
+      'text-align', 'white-space'
+    ];
+    applyConservativeInlineStyle(original, cloned, document.baseURI, addResource, props);
+  }
+
+  function shouldSnapshotForHighFidelity(node) {
+    if (!(node instanceof Element)) return false;
+    const tag = node.tagName.toLowerCase();
+    const cls = String(node.className || '').toLowerCase();
+    if (/carousel|slider|hero|banner|header|footer|cta|btn|card/.test(cls)) return true;
+    if (['h1', 'h2', 'h3', 'button', 'nav', 'section', 'article', 'main'].includes(tag)) return true;
+    const rect = node.getBoundingClientRect();
+    return rect.width >= 120 && rect.height >= 40 && rect.top < window.innerHeight * 2;
+  }
+
+  function markCarouselScopes(root) {
+    if (!root || !root.querySelectorAll) return 0;
+    const candidates = Array.from(root.querySelectorAll(
+      '.slick-slider, .slick-track, .swiper, .swiper-container, .swiper-wrapper, .owl-carousel, .owl-stage, .splide, .splide__track, .glide, .glide__track, [class*="carousel"], [class*="slider"]'
+    ));
+    const unique = new Set();
+    candidates.forEach((node) => {
+      if (!(node instanceof Element)) return;
+      const host = node.closest('section, article, main, div') || node;
+      host.setAttribute('data-archiver-carousel-scope', 'true');
+      unique.add(host);
+    });
+    return unique.size;
+  }
+
+  function staticizeGenericCarousels(root) {
+    if (!root || !root.querySelectorAll) return 0;
+    const docRef = root.ownerDocument || document;
+    let updated = 0;
+    root.querySelectorAll('[data-archiver-carousel-scope="true"]').forEach((scope) => {
+      const images = Array.from(scope.querySelectorAll('img')).filter((img) => !!img.getAttribute('src'));
+      if (images.length < 2) return;
+      const grid = docRef.createElement('div');
+      grid.setAttribute('data-archiver-static-carousel-generic', 'true');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;align-items:center;';
+      images.slice(0, 80).forEach((img) => {
+        const wrap = docRef.createElement('div');
+        wrap.style.cssText = 'display:flex;align-items:center;justify-content:center;min-height:60px;padding:6px;';
+        const clone = img.cloneNode(true);
+        clone.removeAttribute('srcset');
+        clone.style.cssText = 'max-width:100%;max-height:70px;object-fit:contain;';
+        wrap.appendChild(clone);
+        grid.appendChild(wrap);
+      });
+      const host = scope.querySelector('.slick-track, .swiper-wrapper, .owl-stage, .splide__list, .glide__slides') || scope;
+      host.innerHTML = '';
+      host.appendChild(grid);
+      updated += 1;
+    });
+    return updated;
+  }
+
+
+  function cleanupArchivedDocument(root, debug, options = {}) {
     const docRef = root.ownerDocument || document;
     const removableSelectors = [
       'remove-web-limits-iqxin',
@@ -1071,7 +1196,29 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
 [data-archiver-static-carousel] .elementor-widget-container { width: 100% !important; }
 [data-archiver-static-carousel="logos"] .archiver-static-carousel-grid { padding: 8px 0 12px !important; }
 [data-archiver-static-carousel="media"] .archiver-static-carousel-grid { padding: 8px 0 12px !important; }
+[data-archiver-carousel-scope="true"] .slick-slide, [data-archiver-carousel-scope="true"] .swiper-slide, [data-archiver-carousel-scope="true"] .owl-item, [data-archiver-carousel-scope="true"] .splide__slide, [data-archiver-carousel-scope="true"] .glide__slide {
+  display:block !important;
+  visibility:visible !important;
+  opacity:1 !important;
+  transform:none !important;
+}
+[data-archiver-carousel-scope="true"] .slick-track, [data-archiver-carousel-scope="true"] .swiper-wrapper, [data-archiver-carousel-scope="true"] .owl-stage, [data-archiver-carousel-scope="true"] .splide__list, [data-archiver-carousel-scope="true"] .glide__slides {
+  display:flex !important;
+  flex-wrap:wrap !important;
+  transform:none !important;
+  gap:16px !important;
+}
+[data-archiver-carousel-scope="true"] .slick-arrow, [data-archiver-carousel-scope="true"] .slick-dots, [data-archiver-carousel-scope="true"] .swiper-button-prev, [data-archiver-carousel-scope="true"] .swiper-button-next, [data-archiver-carousel-scope="true"] .swiper-pagination, [data-archiver-carousel-scope="true"] .owl-nav, [data-archiver-carousel-scope="true"] .owl-dots, [data-archiver-carousel-scope="true"] .splide__arrows, [data-archiver-carousel-scope="true"] .splide__pagination, [data-archiver-carousel-scope="true"] .glide__arrows, [data-archiver-carousel-scope="true"] .glide__bullets {
+  display:none !important;
+}
 `;
+    if (options.carouselMode === 'assets') {
+      patch.textContent += `
+[data-archiver-carousel-scope="true"] .slick-track, [data-archiver-carousel-scope="true"] .swiper-wrapper, [data-archiver-carousel-scope="true"] .owl-stage, [data-archiver-carousel-scope="true"] .splide__list, [data-archiver-carousel-scope="true"] .glide__slides {
+  align-items: stretch !important;
+}
+`;
+    }
     const head = root.querySelector('head');
     if (head) head.appendChild(patch);
     else root.prepend(patch);
@@ -1081,7 +1228,7 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
     await waitForPageSettled();
 
     const debug = {
-      archiverVersion: '2.1.13.7-debuglog-layouttargeted',
+      archiverVersion: '2.3.1-carousel-scope-refine',
       pageUrl: location.href,
       title: document.title || 'untitled',
       capturedAt: new Date().toISOString(),
@@ -1089,7 +1236,10 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
       options: {
         includeScripts: options.includeScripts !== false,
         includeStyles: options.includeStyles !== false,
-        includeMedia: options.includeMedia !== false
+        includeMedia: options.includeMedia !== false,
+        imagesOnly: options.imagesOnly === true,
+        carouselMode: options.carouselMode === 'assets' ? 'assets' : 'visual',
+        styleFidelity: options.styleFidelity === 'high' ? 'high' : 'basic'
       },
       counters: { resourcesAdded: 0 },
       headings: [],
@@ -1108,12 +1258,26 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
 
     const doc = document.documentElement.cloneNode(true);
     hydrateLazyAssets(doc);
+    const carouselScopeCount = markCarouselScopes(doc);
+    debug.counters.carouselScopes = carouselScopeCount;
     const resources = [];
     const seen = new Set();
     let resourceIndex = 0;
+    let highFidelityApplied = 0;
+    const highFidelityLimit = options.styleFidelity === 'high' ? 600 : 0;
+
+    function shouldInclude(kind) {
+      if (kind === 'script') return options.includeScripts !== false;
+      if (kind === 'style') return options.includeStyles !== false;
+      if (kind === 'video' || kind === 'audio') return options.includeMedia !== false && options.imagesOnly !== true;
+      if (options.imagesOnly === true) return kind === 'media' || kind === 'style-asset' || kind === 'asset';
+      if (kind === 'media' || kind === 'style-asset' || kind === 'font' || kind === 'asset') return options.includeMedia !== false;
+      return true;
+    }
 
     function addResource(url, kind, preferredName) {
       if (!url || seen.has(url)) return;
+      if (!shouldInclude(kind)) return;
       seen.add(url);
       resources.push({
         id: `res_${resourceIndex++}`,
@@ -1122,13 +1286,6 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
         preferredName: preferredName || null
       });
       debug.counters.resourcesAdded += 1;
-    }
-
-    function shouldInclude(kind) {
-      if (kind === 'script') return options.includeScripts !== false;
-      if (kind === 'style') return options.includeStyles !== false;
-      if (kind === 'media' || kind === 'style-asset' || kind === 'font' || kind === 'asset') return options.includeMedia !== false;
-      return true;
     }
 
     for (const rule of ATTRS) {
@@ -1187,7 +1344,20 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
         const absolute = absoluteUrl(candidate);
         if (absolute) addResource(absolute, 'media');
       }
+
+      collectImageLikeResourceCandidates(original, addResource);
+      forceCarouselVisualState(original, cloned, addResource, options.carouselMode === 'assets' ? 'assets' : 'visual');
+      if (options.styleFidelity === 'high' && highFidelityApplied < highFidelityLimit && shouldSnapshotForHighFidelity(original)) {
+        applyHighFidelityStyleSnapshot(original, cloned, addResource);
+        highFidelityApplied += 1;
+      }
     });
+
+    if (options.carouselMode === 'assets') {
+      const staticized = staticizeGenericCarousels(doc);
+      debug.counters.staticizedCarousels = staticized;
+    }
+    debug.counters.highFidelityApplied = highFidelityApplied;
 
     if (options.includeStyles !== false) {
       const originalStyleTags = Array.from(document.querySelectorAll('style'));
@@ -1219,7 +1389,7 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
 
     doc.querySelectorAll('noscript').forEach((node) => node.remove());
 
-    cleanupArchivedDocument(doc, debug);
+    cleanupArchivedDocument(doc, debug, options);
 
     const doctype = document.doctype
       ? `<!DOCTYPE ${document.doctype.name}${document.doctype.publicId ? ` PUBLIC "${document.doctype.publicId}"` : ''}${document.doctype.systemId ? ` "${document.doctype.systemId}"` : ''}>`
@@ -1234,7 +1404,10 @@ iframe[src*="recaptcha"], .grecaptcha-badge { display:none !important; }
       options: {
         includeScripts: options.includeScripts !== false,
         includeStyles: options.includeStyles !== false,
-        includeMedia: options.includeMedia !== false
+        includeMedia: options.includeMedia !== false,
+        imagesOnly: options.imagesOnly === true,
+        carouselMode: options.carouselMode === 'assets' ? 'assets' : 'visual',
+        styleFidelity: options.styleFidelity === 'high' ? 'high' : 'basic'
       },
       debug
     };
