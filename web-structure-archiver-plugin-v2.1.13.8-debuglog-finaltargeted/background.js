@@ -104,11 +104,17 @@ async function executeScriptFile(tabId, file) {
 
 function normalizeOptions(options) {
   const concurrency = Number(options.fetchConcurrency);
+  const imagesOnly = options.imagesOnly === true;
+  const carouselMode = options.carouselMode === 'assets' ? 'assets' : 'visual';
+  const styleFidelity = options.styleFidelity === 'high' ? 'high' : 'basic';
   return {
     fetchConcurrency: Number.isFinite(concurrency) && concurrency > 0 ? Math.min(Math.max(concurrency, 1), 24) : 8,
-    includeScripts: options.includeScripts !== false,
-    includeStyles: options.includeStyles !== false,
-    includeMedia: options.includeMedia !== false
+    includeScripts: imagesOnly ? false : options.includeScripts !== false,
+    includeStyles: imagesOnly ? false : options.includeStyles !== false,
+    includeMedia: imagesOnly ? true : options.includeMedia !== false,
+    imagesOnly,
+    carouselMode,
+    styleFidelity
   };
 }
 
@@ -177,7 +183,7 @@ async function buildArchive(payload, options, pageUrl) {
 
   const queueResults = await mapWithConcurrency(payload.resources || [], options.fetchConcurrency, async (resource, index) => {
     try {
-      const output = await fetchResource(resource, index, { usedPaths, pathByUrl });
+      const output = await fetchResource(resource, index, { usedPaths, pathByUrl, options });
       return { ok: true, output };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error), resource };
@@ -190,7 +196,9 @@ async function buildArchive(payload, options, pageUrl) {
       continue;
     }
 
-    resourceMap.set(item.output.url, item.output.localPath);
+    if (item.output.localPath) {
+      resourceMap.set(item.output.url, item.output.localPath);
+    }
     if (!item.output.skipWrite) files.push({ path: `${folderName}/${item.output.localPath}`, bytes: item.output.bytes });
 
     if (Array.isArray(item.output.extraFiles)) {
@@ -231,15 +239,19 @@ async function fetchResource(resource, index, ctx) {
     return { url: resource.url, localPath: ctx.pathByUrl.get(resource.url), bytes: new Uint8Array(), skipWrite: true, extraFiles: [], extraMap: new Map() };
   }
 
-  const response = await fetch(resource.url, { credentials: 'include' });
+  const response = await fetchWithRetry(resource.url, { credentials: 'include' });
   if (!response.ok) throw new Error(`HTTP_${response.status}`);
 
   const bytes = new Uint8Array(await response.arrayBuffer());
   const contentType = response.headers.get('content-type') || '';
+  if (ctx.options?.imagesOnly === true && !isImageLikeResource(resource.url, contentType)) {
+    return { url: resource.url, localPath: '', bytes: new Uint8Array(), skipWrite: true, extraFiles: [], extraMap: new Map() };
+  }
   const extension = guessExtension(resource.url, contentType, resource.kind);
   const baseName = basenameFromUrl(resource.url) || `resource-${index + 1}`;
   const safeName = sanitizeFilename(baseName.replace(/\.[^.]+$/, '')) || `resource-${index + 1}`;
-  let localPath = buildLocalPath(resource.kind, `${safeName}${extension}`);
+  const hashedName = `${safeName}-${shortHash(resource.url)}`;
+  let localPath = buildLocalPath(resource.kind, `${hashedName}${extension}`);
   localPath = ensureUniquePath(localPath, ctx.usedPaths);
   ctx.pathByUrl.set(resource.url, localPath);
 
@@ -260,6 +272,8 @@ function buildLocalPath(kind, filename) {
     case 'script': return `assets/js/${filename}`;
     case 'document': return `assets/docs/${filename}`;
     case 'font': return `assets/fonts/${filename}`;
+    case 'video': return `assets/video/${filename}`;
+    case 'audio': return `assets/audio/${filename}`;
     default: return `assets/media/${filename}`;
   }
 }
@@ -280,7 +294,7 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
       return `@import url("${toCssRelativePath(cssLocalPath, localPath)}")${trailing || ''};`;
     }
     try {
-      const response = await fetch(absolute, { credentials: 'include' });
+      const response = await fetchWithRetry(absolute, { credentials: 'include' });
       if (!response.ok) return full;
       const bytes = new Uint8Array(await response.arrayBuffer());
       const importedText = new TextDecoder().decode(bytes);
@@ -311,7 +325,7 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
     }
 
     try {
-      const response = await fetch(absolute, { credentials: 'include' });
+      const response = await fetchWithRetry(absolute, { credentials: 'include' });
       if (!response.ok) return full;
       const bytes = new Uint8Array(await response.arrayBuffer());
       const contentType = response.headers.get('content-type') || '';
@@ -330,6 +344,55 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
   });
 
   return { text: transformed, nestedFiles, nestedMap };
+}
+
+
+function isImageLikeContentType(contentType) {
+  const ct = String(contentType || '').toLowerCase();
+  return ct.startsWith('image/') || ct.includes('svg');
+}
+
+function isImageLikeResource(url, contentType) {
+  if (isImageLikeContentType(contentType)) return true;
+  const lower = String(url || '').toLowerCase();
+  return /\.(png|jpe?g|webp|gif|avif|bmp|svg)(\?|#|$)/i.test(lower);
+}
+
+function shortHash(value) {
+  let hash = 2166136261;
+  const text = String(value || '');
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36).slice(0, 6);
+}
+
+async function fetchWithRetry(url, init = {}, maxRetries = 2) {
+  let attempt = 0;
+  let lastError = null;
+  while (attempt <= maxRetries) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (response.ok) return response;
+      if (![408, 425, 429, 500, 502, 503, 504].includes(response.status) || attempt === maxRetries) return response;
+      await delay(300 * (attempt + 1) * (attempt + 1));
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+      if (attempt === maxRetries) throw error;
+      await delay(300 * (attempt + 1) * (attempt + 1));
+    }
+    attempt += 1;
+  }
+  throw lastError || new Error('fetch retry exhausted');
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function rewriteHtml(html, resourceMap) {
@@ -378,7 +441,8 @@ async function mapWithConcurrency(items, concurrency, worker) {
 function basenameFromUrl(url) {
   try {
     const pathname = new URL(url).pathname;
-    return pathname.split('/').filter(Boolean).pop() || '';
+    const raw = pathname.split('/').filter(Boolean).pop() || '';
+    return decodeUrlComponentSafe(raw);
   } catch {
     return '';
   }
@@ -415,8 +479,11 @@ function guessExtension(url, contentType, kind) {
 
 function sanitizeFilename(value) {
   return String(value || '')
-    .replace(/[\/:*?"<>| -]/g, '-')
+    .replace(/\+/g, ' ')
+    .replace(/[\/:*?"<>|\x00-\x1f]/g, '-')
     .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\.+$/g, '')
     .trim();
 }
 
@@ -439,8 +506,32 @@ function ensureExtension(path, ext) {
 }
 
 function makeSafeAssetName(url, fallback, ext) {
-  const base = sanitizeFilename((basenameFromUrl(url) || fallback).replace(/\.[^.]+$/, '')) || fallback;
+  const candidate = basenameFromUrl(url) || deriveNameFromQuery(url) || fallback;
+  const base = sanitizeFilename(candidate.replace(/\.[^.]+$/, '')) || fallback;
   return `${base}${ext}`;
+}
+
+
+function decodeUrlComponentSafe(value) {
+  try {
+    return decodeURIComponent(String(value || ''));
+  } catch {
+    return String(value || '');
+  }
+}
+
+function deriveNameFromQuery(url) {
+  try {
+    const u = new URL(url);
+    const queryNames = ['filename', 'file', 'name', 'download', 'image', 'img'];
+    for (const key of queryNames) {
+      const val = u.searchParams.get(key);
+      if (val) return decodeUrlComponentSafe(val);
+    }
+    return '';
+  } catch {
+    return '';
+  }
 }
 
 function absoluteUrlFrom(raw, baseUrl) {
