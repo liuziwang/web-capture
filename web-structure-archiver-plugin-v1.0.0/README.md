@@ -10,7 +10,7 @@
 1. 打开 `chrome://extensions`
 2. 打开“开发者模式”
 3. 选择“加载已解压的扩展程序”
-4. 选择本目录 `web-archiver-plugin`
+4. 选择本目录 `web-structure-archiver-plugin-v1.0.0`
 5. 打开目标网页，点击扩展图标
 6. 选择选项后点击“开始归档并下载”
 
@@ -45,3 +45,7 @@
 ## 2.1.12 debuglog
 - 默认在归档包中额外输出 debug.json。
 - 记录标题文字样式、按钮样式、背景候选区块、图片状态、被移除节点、占位表单与搜索表单信息，便于后续针对样式/布局问题继续优化。
+
+## 本地快速检查
+- 可使用以下命令检查脚本语法：
+  - `for f in web-structure-archiver-plugin-v1.0.0/*.js; do node --check "$f"; done`
