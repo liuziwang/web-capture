@@ -22,6 +22,28 @@
       </select>
     </label>
 
+    <label class="row" for="maxRetries">
+      <span>失败重试次数</span>
+      <select id="maxRetries">
+        <option value="0">0</option>
+        <option value="1">1</option>
+        <option value="2" selected>2</option>
+        <option value="3">3</option>
+        <option value="4">4</option>
+      </select>
+    </label>
+
+    <label class="row" for="requestTimeoutMs">
+      <span>单资源超时（秒）</span>
+      <select id="requestTimeoutMs">
+        <option value="8000">8</option>
+        <option value="12000" selected>12</option>
+        <option value="16000">16</option>
+        <option value="20000">20</option>
+        <option value="30000">30</option>
+      </select>
+    </label>
+
     <label class="check-row" for="includeScripts">
       <input id="includeScripts" type="checkbox" />
       <span>包含外链脚本文件（不建议默认开启）</span>

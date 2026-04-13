@@ -104,8 +104,12 @@ async function executeScriptFile(tabId, file) {
 
 function normalizeOptions(options) {
   const concurrency = Number(options.fetchConcurrency);
+  const maxRetries = Number(options.maxRetries);
+  const requestTimeoutMs = Number(options.requestTimeoutMs);
   return {
     fetchConcurrency: Number.isFinite(concurrency) && concurrency > 0 ? Math.min(Math.max(concurrency, 1), 24) : 8,
+    maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? Math.min(Math.max(Math.floor(maxRetries), 0), 4) : 2,
+    requestTimeoutMs: Number.isFinite(requestTimeoutMs) && requestTimeoutMs >= 3000 ? Math.min(Math.max(Math.floor(requestTimeoutMs), 3000), 45000) : 12000,
     includeScripts: options.includeScripts !== false,
     includeStyles: options.includeStyles !== false,
     includeMedia: options.includeMedia !== false
@@ -177,7 +181,7 @@ async function buildArchive(payload, options, pageUrl) {
 
   const queueResults = await mapWithConcurrency(payload.resources || [], options.fetchConcurrency, async (resource, index) => {
     try {
-      const output = await fetchResource(resource, index, { usedPaths, pathByUrl });
+      const output = await fetchResource(resource, index, { usedPaths, pathByUrl, options });
       return { ok: true, output };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error), resource };
@@ -231,7 +235,7 @@ async function fetchResource(resource, index, ctx) {
     return { url: resource.url, localPath: ctx.pathByUrl.get(resource.url), bytes: new Uint8Array(), skipWrite: true, extraFiles: [], extraMap: new Map() };
   }
 
-  const response = await fetch(resource.url, { credentials: 'include' });
+  const response = await fetchWithRetry(resource.url, ctx.options);
   if (!response.ok) throw new Error(`HTTP_${response.status}`);
 
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -245,7 +249,7 @@ async function fetchResource(resource, index, ctx) {
 
   if ((contentType.includes('text/css') || extension === '.css') && bytes.length > 0) {
     const cssText = new TextDecoder().decode(bytes);
-    const { text, nestedFiles, nestedMap } = await inlineCssAssets(cssText, resource.url, index, localPath, ctx);
+    const { text, nestedFiles, nestedMap } = await inlineCssAssets(cssText, resource.url, index, localPath, ctx, ctx.options);
     localPath = ensureExtension(localPath, '.css');
     ctx.pathByUrl.set(resource.url, localPath);
     return { url: resource.url, localPath, bytes: encodeText(text), extraFiles: nestedFiles, extraMap: nestedMap, skipWrite: false };
@@ -264,7 +268,7 @@ function buildLocalPath(kind, filename) {
   }
 }
 
-async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
+async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx, options) {
   const nestedMap = new Map();
   const nestedFiles = [];
   let transformed = String(cssText || '');
@@ -280,14 +284,14 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
       return `@import url("${toCssRelativePath(cssLocalPath, localPath)}")${trailing || ''};`;
     }
     try {
-      const response = await fetch(absolute, { credentials: 'include' });
+      const response = await fetchWithRetry(absolute, options);
       if (!response.ok) return full;
       const bytes = new Uint8Array(await response.arrayBuffer());
       const importedText = new TextDecoder().decode(bytes);
       const importedName = makeSafeAssetName(absolute, `css-import-${seed + 1}-${nestedIndex + 1}`, '.css');
       const localPath = ensureUniquePath(`assets/css/${importedName}`, ctx.usedPaths);
       ctx.pathByUrl.set(absolute, localPath);
-      const nested = await inlineCssAssets(importedText, absolute, seed + nestedIndex + 1, localPath, ctx);
+      const nested = await inlineCssAssets(importedText, absolute, seed + nestedIndex + 1, localPath, ctx, options);
       nestedFiles.push({ path: localPath, bytes: encodeText(nested.text) }, ...nested.nestedFiles);
       nestedMap.set(absolute, localPath);
       for (const [k, v] of nested.nestedMap.entries()) nestedMap.set(k, v);
@@ -311,7 +315,7 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
     }
 
     try {
-      const response = await fetch(absolute, { credentials: 'include' });
+      const response = await fetchWithRetry(absolute, options);
       if (!response.ok) return full;
       const bytes = new Uint8Array(await response.arrayBuffer());
       const contentType = response.headers.get('content-type') || '';
@@ -330,6 +334,35 @@ async function inlineCssAssets(cssText, cssUrl, seed, cssLocalPath, ctx) {
   });
 
   return { text: transformed, nestedFiles, nestedMap };
+}
+
+async function fetchWithRetry(url, options) {
+  const maxRetries = Math.max(0, Number(options?.maxRetries || 0));
+  const timeoutMs = Math.max(3000, Number(options?.requestTimeoutMs || 12000));
+  const retryableStatus = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(new Error('REQUEST_TIMEOUT')), timeoutMs);
+    try {
+      const response = await fetch(url, { credentials: 'include', signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (response.ok) return response;
+      if (!retryableStatus.has(response.status) || attempt >= maxRetries) return response;
+      await sleep(250 * (attempt + 1));
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+      if (attempt >= maxRetries) break;
+      await sleep(250 * (attempt + 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('NETWORK_FETCH_FAILED');
+}
+
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function rewriteHtml(html, resourceMap) {

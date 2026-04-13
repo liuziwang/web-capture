@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Web Structure Archiver",
-  "version": "2.1.13",
-  "description": "扫描当前网页的结构代码与静态资源，重写为本地相对路径并打包为 zip 下载。基于 2.1.9 稳定策略，并默认附带 debug.json 调试日志，便于后续针对样式/布局问题持续优化。",
+  "version": "2.2.0",
+  "description": "扫描当前网页的结构代码与静态资源，重写为本地相对路径并打包为 zip 下载。支持资源抓取重试与超时控制，提升复杂站点抓取稳定性。",
   "permissions": [
     "activeTab",
     "scripting",
